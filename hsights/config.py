@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 
 #: Render sets PORT; 8051 keeps the historical local default.
-PORT = int(os.environ.get('PORT', 8051))
+PORT = int(os.environ.get('PORT', 8091))
 
 #: Render requires 0.0.0.0. Override to 127.0.0.1 for a private local run.
 HOST = os.environ.get('HOST', '0.0.0.0')
