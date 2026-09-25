@@ -60,6 +60,36 @@ def from_yfinance(symbols: list[str], years: int) -> pd.DataFrame:
     return panel.sort_index().dropna(axis=1, how='all').dropna(axis=0, how='any')
 
 
+def add_extra_symbols(panel: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
+    """Append symbols that a constituent list cannot supply.
+
+    SPY is the benchmark drawn on the return chart, but it is an ETF rather
+    than an index member, so it never appears in a panel built from an S&P
+    membership CSV. It has to be fetched separately and aligned to the
+    existing trading calendar.
+    """
+    import yfinance as yf
+    wanted = [symbol for symbol in symbols if symbol not in panel.columns]
+    if not wanted:
+        return panel
+    raw = yf.download(wanted, start=str((panel.index[0] - pd.Timedelta(days=7)).date()),
+                      end=str((panel.index[-1] + pd.Timedelta(days=1)).date()),
+                      auto_adjust=True, actions=False, progress=False, threads=False,
+                      group_by='column', multi_level_index=True)
+    if raw is None or raw.empty:
+        raise SystemExit(f'Yahoo returned nothing for {", ".join(wanted)}. '
+                         'Pass --extra-symbols with no values to build without them.')
+    extra = raw['Close']
+    extra.index = pd.to_datetime(extra.index).tz_localize(None).normalize()
+    extra = extra.sort_index().reindex(panel.index)
+    missing = extra.columns[extra.isna().any()].tolist()
+    if missing:
+        raise SystemExit(f'{", ".join(missing)} has gaps on the panel calendar. '
+                         'No values were filled; shorten the history or drop the symbol.')
+    print(f'added {", ".join(extra.columns)} alongside {panel.shape[1]} panel symbols')
+    return panel.join(extra, how='left')
+
+
 def validate(panel: pd.DataFrame) -> None:
     if panel.shape[1] < MINIMUM_SYMBOLS:
         raise SystemExit(f'Only {panel.shape[1]} symbols survived; need {MINIMUM_SYMBOLS}.')
@@ -81,6 +111,10 @@ def main() -> None:
     parser.add_argument('--years', type=int, default=15)
     parser.add_argument('--coverage', type=float, default=.98,
                         help='Minimum fraction of dates a symbol must cover to be kept.')
+    parser.add_argument('--extra-symbols', nargs='*', default=['SPY'],
+                        help='Symbols to fetch and append, for tickers a constituent '
+                             'list cannot supply. Defaults to SPY, the benchmark drawn '
+                             'on the return chart. Pass with no values to skip.')
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     arguments = parser.parse_args()
 
@@ -92,6 +126,9 @@ def main() -> None:
         panel = from_yfinance(list(arguments.symbols or UNIVERSE), arguments.years)
         source_label = 'yfinance'
 
+    if arguments.extra_symbols:
+        panel = add_extra_symbols(panel, list(arguments.extra_symbols))
+
     validate(panel)
     panel = panel.astype('float32')
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +138,7 @@ def main() -> None:
         'source': source_label,
         'built': date.today().isoformat(),
         'symbols': int(panel.shape[1]),
+        'extra_symbols': list(arguments.extra_symbols or []),
         'rows': int(panel.shape[0]),
         'start': str(panel.index[0].date()),
         'end': str(panel.index[-1].date()),

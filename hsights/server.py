@@ -5,10 +5,9 @@ process, so the service must run a single worker with threads — never
 multiple workers, and never more than one instance behind a load balancer
 without sticky sessions.
 
-Adding a second game: build its Dash app the same way and mount it with
-DispatcherMiddleware. Portfolio Challenge is at ``/`` today because it is
-the only game; moving it under a prefix means giving its Dash app a matching
-``requests_pathname_prefix`` so its assets resolve.
+The single Dash app serves the hub landing page at ``/`` and the board at
+``/play``, swapped client-side by ``dcc.Location``. Dash registers a catch-all
+index route, so a direct request or a refresh on ``/play`` is served too.
 """
 from __future__ import annotations
 

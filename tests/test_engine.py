@@ -167,6 +167,56 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             game.toggle()                 # must reallocate before playing again
 
+    def test_benchmark_is_revealed_one_day_at_a_time(self):
+        frame = prices([[.01, 0, 0]] * 3)
+        # Benchmark rises 2% a day only after the start, so any leak of a future
+        # value would show up immediately as a non-zero day-zero reading.
+        series = pd.Series(100 * np.cumprod([1] * 4 + [1.02] * 4),
+                           index=frame.index, dtype=float)
+        game = Game(frame, frame.index[3], replace(self.rules, cost_bps=0),
+                    benchmark=series, benchmark_symbol='SPY')
+        game.allocate([1, 0, 0])
+        self.assertEqual(game.snapshot()['benchmark_symbol'], 'SPY')
+        self.assertAlmostEqual(game.snapshot()['benchmark_return'], 0.0)
+        self.assertEqual(len(game.history), 1)
+        game.toggle()
+        game.step()
+        self.assertAlmostEqual(game.snapshot()['benchmark_return'], .02, places=6)
+        game.step()
+        self.assertAlmostEqual(game.snapshot()['benchmark_return'], 1.02 ** 2 - 1, places=6)
+        # The history only ever holds days already played.
+        revealed = [row['benchmark_return'] for row in game.snapshot()['history']]
+        self.assertEqual(len(revealed), game.position - game.start + 1)
+        self.assertTrue(all(value is not None for value in revealed))
+
+    def test_benchmark_truncates_on_rewind_and_clears_on_restart(self):
+        frame = prices([[.01, 0, 0]] * 3)
+        series = pd.Series(100 * np.cumprod([1] * 4 + [1.02] * 4),
+                           index=frame.index, dtype=float)
+        game = Game(frame, frame.index[3], replace(self.rules, cost_bps=0),
+                    benchmark=series, benchmark_symbol='SPY')
+        game.allocate([1, 0, 0]); game.toggle()
+        game.step(); game.step()
+        self.assertEqual(len(game.history), 3)
+        game.rewind(1)
+        self.assertEqual(len(game.history), 2)
+        self.assertAlmostEqual(game.snapshot()['benchmark_return'], .02, places=6)
+        game.restart()
+        self.assertEqual(game.snapshot()['history'], [])
+        self.assertAlmostEqual(game.snapshot()['benchmark_return'], 0.0)
+
+    def test_a_broken_benchmark_never_breaks_the_round(self):
+        frame = prices([[.01, 0, 0]])
+        for bad in (pd.Series([100.] * 4, index=frame.index[:4]),      # wrong length
+                    pd.Series([100.] * 7 + [np.nan], index=frame.index),
+                    pd.Series([100.] * 7 + [0.], index=frame.index)):
+            game = Game(frame, frame.index[3], self.rules,
+                        benchmark=bad, benchmark_symbol='SPY')
+            self.assertIsNone(game.snapshot()['benchmark_symbol'])
+            self.assertIsNone(game.snapshot()['benchmark_return'])
+            game.allocate([1, 0, 0])     # still fully playable
+            self.assertEqual(game.status, 'paused')
+
     def test_missing_data_and_coverage(self):
         frame = prices(); frame.iloc[4,0] = np.nan
         with self.assertRaises(ValueError):

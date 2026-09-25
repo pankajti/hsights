@@ -21,6 +21,7 @@ from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
 
 from hsights.config import HOST, PORT, SESSION_LIMIT, SESSION_TTL_SECONDS
+from hsights.home import PLAY_PATH, home_page
 from hsights.games.portfolio_challenge.data import create_round
 from hsights.games.portfolio_challenge.engine import Rules, minimum_risk
 
@@ -44,6 +45,28 @@ TOLERANCE = 1e-9
 STEPS = (('01', 'PICK YOUR MARKET'),
          ('02', 'BUILD YOUR MIX'),
          ('03', 'SURVIVE TO THE DEADLINE'))
+
+#: The single "what do I do next" button in the header, keyed by game status.
+#: It dispatches to the same engine calls as the dock and transport buttons, so
+#: every guard still applies; it exists purely so the next move is always visible
+#: without scanning to the bottom of the board.
+PRIMARY_ACTION = {
+    'setup': ('play', 'CONFIRM ALLOCATION', 'go',
+              'Commit this mix at today\'s close, then press PLAY.'),
+    'paused': ('play', 'PLAY', 'go', 'Space - start the market clock.'),
+    'running': ('pause', 'PAUSE', 'hold', 'Space - freeze the market.'),
+    'won': ('restart', 'PLAY AGAIN', 'again', 'Replay the same round from day 0.'),
+    'lost': ('restart', 'PLAY AGAIN', 'again', 'Replay the same round from day 0.'),
+}
+NO_ROUND_ACTION = ('shuffle', 'DRAW A ROUND', 'go',
+                   'Open settings and draw three assets.')
+
+
+def primary_action(status=None):
+    """(children, className, title) for the header's primary button."""
+    symbol, label, variant, hint = (PRIMARY_ACTION.get(status, NO_ROUND_ACTION)
+                                    if status else NO_ROUND_ACTION)
+    return [icon(symbol, True), label], f'primary-action {variant}', hint
 
 
 # --------------------------------------------------------------- presentation
@@ -79,12 +102,86 @@ def step_strip(stage=0):
             for index, (number, label) in enumerate(STEPS)]
 
 
+def worst_drawdown(values):
+    """Deepest peak-to-trough fall in a value series, as a negative fraction."""
+    if not values:
+        return 0.0
+    peak, worst = values[0], 0.0
+    for value in values:
+        peak = max(peak, value)
+        if peak > 0:
+            worst = min(worst, value / peak - 1)
+    return worst
+
+
+def result_body(snapshot, rules):
+    """Contents of the end-of-round modal."""
+    won = snapshot['status'] == 'won'
+    total_return = snapshot['total_return']
+    history = snapshot['history']
+    values = [row['value'] for row in history] or [rules.capital]
+    returns = [row['total_return'] for row in history] or [0.0]
+
+    if won:
+        eyebrow, title = 'CHALLENGE COMPLETE', 'Congratulations'
+        lede = ('You cleared the return target and never breached the loss floor '
+                'or the risk ceiling.')
+    else:
+        eyebrow, title = 'ROUND OVER', 'Sorry, not this time'
+        lede = ('Every round is one draw from a very noisy process. Rewind a few '
+                'days, or restart and try a different mix.')
+
+    tone = 'up' if total_return > 0 else ('down' if total_return < 0 else '')
+    stats = [
+        ('FINAL VALUE', f"${snapshot['value']:,.0f}", ''),
+        ('DAYS SURVIVED', f"{snapshot['day']} / {rules.horizon}", ''),
+        ('PEAK RETURN', f'{max(returns):+.2%}', ''),
+        ('MAX DRAWDOWN', f'{worst_drawdown(values):.2%}', ''),
+        ('TRADING COSTS', f"${snapshot['fees']:,.2f}", ''),
+        ('REBALANCES', f"{len(snapshot['trades'])}", ''),
+    ]
+
+    children = [
+        html.P(eyebrow, className='result-eyebrow'),
+        html.H2(title, className='result-title'),
+        html.Div([html.Strong(f'{total_return:+.2%}', className=f'result-score {tone}'),
+                  html.Span('NET RETURN AFTER COSTS', className='result-score-label')],
+                 className='result-score-row'),
+    ]
+    reference = snapshot.get('benchmark_symbol')
+    benchmark_return = snapshot.get('benchmark_return')
+    if reference and benchmark_return is not None:
+        excess = total_return - benchmark_return
+        verdict = 'BEAT' if excess > 0 else ('MATCHED' if excess == 0 else 'TRAILED')
+        children.append(html.P([
+            html.Span(f'{verdict} {reference}', className=(
+                'verdict up' if excess > 0 else 'verdict down' if excess < 0 else 'verdict')),
+            html.Span(f'{reference} buy and hold returned {benchmark_return:+.2%} over the '
+                      f'same days, so you were {excess:+.2%} against it.'),
+        ], className='result-benchmark'))
+    children += [
+        html.P(lede, className='result-lede'),
+        html.P(snapshot['reason'], className='result-reason'),
+        html.Div([html.Div([html.Small(label), html.Strong(value, className=f'stat-value {stat_tone}'.strip())],
+                           className='result-stat')
+                  for label, value, stat_tone in stats], className='result-stats'),
+    ]
+    if snapshot['assisted']:
+        children.append(html.P(
+            'This run used rewind or restart, so it is marked ASSISTED and is not '
+            'comparable to a clean run.', className='result-assisted'))
+    return html.Div(children, className=f"result-inner {'won' if won else 'lost'}")
+
+
 def hud_tiles(value='—', total_return='—', risk='—', fees='—',
-              return_tone='', risk_tone=''):
+              return_tone='', risk_tone='', excess=None, reference=None):
     items = [('wallet', 'PORTFOLIO VALUE', value, ''),
              ('chart', 'NET RETURN', total_return, return_tone),
              ('shield', 'ESTIMATED RISK', risk, risk_tone),
              ('coins', 'TRADING COSTS', fees, '')]
+    if reference and excess is not None:
+        items.append(('briefcase', f'VS {reference}', f'{excess:+.2%}',
+                      'up' if excess > 0 else ('down' if excess < 0 else '')))
     return [html.Div([html.Div([icon(symbol), html.Small(label)], className='tile-head'),
                       html.Strong(text, className=f'tile-value {tone}'.strip())],
                      className='tile')
@@ -99,10 +196,16 @@ def graph(snapshot, rules):
     days = [row['day'] for row in rows]
     returns = [row['total_return'] * 100 for row in rows]
     risks = [row['risk'] * 100 for row in rows]
+    # Only days already played carry a benchmark value, so the reference line
+    # can never reveal a price the player has not reached yet.
+    reference = snapshot.get('benchmark_symbol')
+    benchmark = [row.get('benchmark_return') for row in rows] if reference else []
+    benchmark = ([value * 100 for value in benchmark]
+                 if benchmark and all(value is not None for value in benchmark) else [])
 
     # Keep scales stable between ticks; expand only in five-point increments.
-    return_min = 5 * floor(min([rules.floor * 100 - 2, 0] + returns) / 5)
-    return_max = 5 * ceil(max([rules.target * 100 + 2, 5] + returns) / 5)
+    return_min = 5 * floor(min([rules.floor * 100 - 2, 0] + returns + benchmark) / 5)
+    return_max = 5 * ceil(max([rules.target * 100 + 2, 5] + returns + benchmark) / 5)
     risk_max = 5 * ceil(max([rules.risk_cap * 100 + 2, 5] + risks) / 5)
 
     figure = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=.12,
@@ -121,19 +224,28 @@ def graph(snapshot, rules):
     figure.add_hrect(y0=rules.risk_cap * 100, y1=risk_max, row=2, col=1, layer='below',
                      fillcolor='rgba(255,86,112,.10)', line_width=0)
 
+    if benchmark:
+        figure.add_trace(go.Scatter(x=days, y=benchmark, mode='lines', name=reference,
+                                    line=dict(color=MUTED, width=1.8, dash='dash'),
+                                    hovertemplate='%{y:.2f}%'
+                                                  f'<extra>{reference} buy and hold</extra>'),
+                         row=1, col=1)
     figure.add_trace(go.Scatter(x=days, y=returns, mode='lines', fill='tozeroy',
-                                fillcolor=shade, line=dict(color=trend, width=2.4),
+                                name='YOU', fillcolor=shade,
+                                line=dict(color=trend, width=2.4),
                                 hovertemplate='%{y:.2f}%<extra>net return</extra>'),
                      row=1, col=1)
-    figure.add_trace(go.Scatter(x=days, y=risks, mode='lines',
+    figure.add_trace(go.Scatter(x=days, y=risks, mode='lines', showlegend=False,
                                 line=dict(color=WARN, width=2.4),
                                 hovertemplate='%{y:.2f}%<extra>risk</extra>'),
                      row=2, col=1)
     figure.add_trace(go.Scatter(x=days[-1:], y=returns[-1:], mode='markers',
+                                showlegend=False,
                                 marker=dict(color=trend, size=9,
                                             line=dict(color='#080b14', width=2)),
                                 hoverinfo='skip'), row=1, col=1)
     figure.add_trace(go.Scatter(x=days[-1:], y=risks[-1:], mode='markers',
+                                showlegend=False,
                                 marker=dict(color=WARN, size=9,
                                             line=dict(color='#080b14', width=2)),
                                 hoverinfo='skip'), row=2, col=1)
@@ -146,7 +258,10 @@ def graph(snapshot, rules):
                          annotation_position='top left',
                          annotation_font=dict(size=9, color=colour, family=MONO))
 
-    figure.update_layout(autosize=True, showlegend=False, template='plotly_dark',
+    figure.update_layout(autosize=True, showlegend=bool(benchmark), template='plotly_dark',
+                         legend=dict(orientation='h', xanchor='right', x=1,
+                                     yanchor='top', y=1.13, bgcolor='rgba(0,0,0,0)',
+                                     font=dict(size=9.5, color=MUTED, family=MONO)),
                          margin=dict(l=48, r=16, t=26, b=26), hovermode='x unified',
                          paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                          font=dict(family=MONO, color=MUTED, size=10.5),
@@ -190,6 +305,8 @@ OUTPUT_SPEC = (
     ('w0', 'value'), ('w1', 'value'), ('w2', 'value'),
     ('tick0', 'children'), ('tick1', 'children'), ('tick2', 'children'),
     ('seed', 'value'), ('setup', 'className'),
+    ('result', 'className'), ('result-body', 'children'),
+    ('primary', 'children'), ('primary', 'className'), ('primary', 'title'),
 )
 
 
@@ -346,14 +463,46 @@ def create_app(round_factory=create_round):
             ], className='gauge-column'),
         ], className='dock')
 
+    def result_sheet():
+        """End-of-round modal. The action buttons live in the static layout so
+        their ids always exist for the callback; only the body is rendered."""
+        return html.Div(html.Div([
+            html.Div(id='result-body'),
+            html.Div([
+                html.Button([icon('restart', True), 'PLAY AGAIN'], id='result-restart',
+                            className='btn-xl primary',
+                            title='Replay the same assets and dates from day 0.'),
+                html.Button([icon('shuffle', True), 'NEW ROUND'], id='result-new',
+                            className='btn-xl',
+                            title='Open settings and draw different assets.'),
+                html.Button('VIEW BOARD', id='close-result', className='btn-xl ghost',
+                            title='Escape - dismiss this and inspect the final chart.'),
+            ], className='result-actions'),
+        ], className='result-card'), id='result', className='overlay result-overlay')
+
     def layout():
+        # Both pages stay mounted and are swapped with a class, rather than the
+        # layout being rebuilt per route. That keeps every game component id in
+        # the DOM, so the callbacks below need no suppress_callback_exceptions
+        # and dcc.Link navigation never tears down a round in progress.
+        return html.Div([
+            dcc.Location(id='url', refresh=False),
+            html.Div(home_page(), id='page-home', className='page is-active'),
+            html.Div(game_shell(), id='page-game', className='page'),
+        ], className='router')
+
+    def game_shell():
+        initial_primary = primary_action()
         return html.Div([
             dcc.Store(id='session', data=str(uuid4())),
             dcc.Store(id='game-revision', data=None),
             dcc.Interval(id='clock', interval=1000, disabled=True),
             html.Header([
-                html.Div([icon('chart'), html.Span('PORTFOLIO'),
-                          html.Span('LAB', className='wordmark-alt')], className='wordmark'),
+                dcc.Link([icon('chart'), html.Span('PORTFOLIO'),
+                          html.Span('LAB', className='wordmark-alt'),
+                          html.Span('HOME', className='home-hint')],
+                         href='/', className='wordmark wordmark-link',
+                         title='Back to the Hindsight home page. Your round is kept.'),
                 html.Div('NO ROUND LOADED', id='round-chip', className='round-chip'),
                 html.Div([html.Div('DAY 0 / 0', id='clock-label', className='clock-label'),
                           html.Div(html.Div(id='progress-fill', className='progress-fill',
@@ -363,6 +512,8 @@ def create_app(round_factory=create_round):
                          title='This run used rewind or restart, so it is not comparable '
                                'to a clean run.'),
                 html.Div('SETUP', id='status-pill', className='pill'),
+                html.Button(initial_primary[0], id='primary',
+                            className=initial_primary[1], title=initial_primary[2]),
                 html.Button([icon('shuffle'), 'SETUP'], id='open-setup', className='ghost',
                             title='S - open the round settings panel.'),
             ], className='topbar'),
@@ -391,6 +542,7 @@ def create_app(round_factory=create_round):
             controls(),
             dock(),
             setup_sheet(),
+            result_sheet(),
         ], className='shell')
 
     app.layout = layout
@@ -401,6 +553,8 @@ def create_app(round_factory=create_round):
                   Input('step', 'n_clicks'), Input('clock', 'n_intervals'),
                   Input('rewind', 'n_clicks'), Input('restart', 'submit_n_clicks'),
                   Input('open-setup', 'n_clicks'), Input('close-setup', 'n_clicks'),
+                  Input('close-result', 'n_clicks'), Input('result-restart', 'n_clicks'),
+                  Input('result-new', 'n_clicks'), Input('primary', 'n_clicks'),
                   State('session', 'data'), State('start', 'value'), State('seed', 'value'),
                   State('target', 'value'), State('floor', 'value'), State('cap', 'value'),
                   State('universe', 'value'), State('period-mode', 'value'),
@@ -409,7 +563,8 @@ def create_app(round_factory=create_round):
                   *[State(f'w{index}', 'value') for index in range(3)],
                   prevent_initial_call=True)
     def interact(new, randomize, allocate, toggle, step, tick, rewind, restart,
-                 open_setup, close_setup, sid, start, seed, target, floor_pct, cap,
+                 open_setup, close_setup, close_result, result_restart, result_new,
+                 primary, sid, start, seed, target, floor_pct, cap,
                  universe, period_mode, duration, end_date, rewind_days, *weights):
         trigger = ctx.triggered_id
         out = {key: no_update for key in OUTPUT_SPEC}
@@ -427,6 +582,8 @@ def create_app(round_factory=create_round):
                     out[('setup', 'className')] = 'overlay is-open'
                 elif trigger == 'close-setup':
                     out[('setup', 'className')] = 'overlay'
+                elif trigger == 'primary' and not entry:
+                    out[('setup', 'className')] = 'overlay is-open'
                 elif trigger in ('new', 'randomize'):
                     if trigger == 'randomize':
                         seed = secrets.randbelow(2 ** 31)
@@ -470,15 +627,34 @@ def create_app(round_factory=create_round):
                     game = entry['game']
                     if trigger == 'allocate':
                         game.allocate([float(value or 0) / 100 for value in weights])
+                    elif trigger == 'primary':
+                        # Dispatches to the same engine calls as the dock and
+                        # transport buttons; it is a shortcut, not a second path.
+                        if game.status == 'setup':
+                            game.allocate([float(value or 0) / 100 for value in weights])
+                        elif game.status in ('paused', 'running'):
+                            game.toggle()
+                        else:
+                            game.restart()
+                            entry['result_dismissed'] = False
+                            suggested = to_percent([w * 100 for w in game.suggested])
+                            for index in range(3):
+                                out[(f'w{index}', 'value')] = suggested[index]
                     elif trigger == 'toggle':
                         game.toggle()
                     elif trigger == 'rewind':
                         game.rewind(int(rewind_days or 5))
-                    elif trigger == 'restart':
+                    elif trigger in ('restart', 'result-restart'):
                         game.restart()
+                        entry['result_dismissed'] = False
                         suggested = to_percent([weight * 100 for weight in game.suggested])
                         for index in range(3):
                             out[(f'w{index}', 'value')] = suggested[index]
+                    elif trigger == 'close-result':
+                        entry['result_dismissed'] = True
+                    elif trigger == 'result-new':
+                        entry['result_dismissed'] = True
+                        out[('setup', 'className')] = 'overlay is-open'
                     elif trigger == 'step':
                         if game.status != 'paused':
                             raise ValueError('Pause before stepping.')
@@ -497,6 +673,8 @@ def create_app(round_factory=create_round):
             out[('game-revision', 'data')] = str(uuid4())
             if not entry:
                 out[('clock', 'disabled')] = True
+                (out[('primary', 'children')], out[('primary', 'className')],
+                 out[('primary', 'title')]) = primary_action()
                 return [out[key] for key in OUTPUT_SPEC]
 
             game = entry['game']
@@ -527,11 +705,15 @@ def create_app(round_factory=create_round):
             out[('reason', 'children')] = reason
 
             ceiling = rules.risk_cap
+            reference = snapshot.get('benchmark_symbol')
+            benchmark_return = snapshot.get('benchmark_return')
+            excess = (total_return - benchmark_return) if benchmark_return is not None else None
             out[('hud', 'children')] = hud_tiles(
                 f"${snapshot['value']:,.0f}", f'{total_return:+.2%}', f'{risk:.2%}',
                 f"${snapshot['fees']:,.2f}",
                 'up' if total_return > 0 else ('down' if total_return < 0 else ''),
-                'down' if risk > ceiling else ('warn' if risk > ceiling * .8 else 'up'))
+                'down' if risk > ceiling else ('warn' if risk > ceiling * .8 else 'up'),
+                excess=excess, reference=reference)
             out[('chart', 'figure')] = graph(snapshot, rules)
             out[('statistics', 'children')] = table(
                 ['ASSET', 'WEIGHT', 'TRAILING 252D'],
@@ -551,6 +733,9 @@ def create_app(round_factory=create_round):
             for index, ticker in enumerate(snapshot['tickers']):
                 out[(f'tick{index}', 'children')] = ticker
 
+            (out[('primary', 'children')], out[('primary', 'className')],
+             out[('primary', 'title')]) = primary_action(status)
+
             running = status == 'running'
             out[('clock', 'disabled')] = not running
             out[('toggle', 'children')] = [icon('pause', True), 'PAUSE'] if running else \
@@ -559,12 +744,24 @@ def create_app(round_factory=create_round):
             out[('step', 'disabled')] = status != 'paused'
             out[('rewind', 'disabled')] = not snapshot['can_rewind']
             out[('restart-button', 'disabled')] = False
+
+            # The end-of-round modal shows once per game over. Dismissing it sets a
+            # flag so reopening settings does not resurrect it; leaving the terminal
+            # state (rewind, restart, new round) clears the flag again.
+            terminal = status in ('won', 'lost')
+            if not terminal:
+                entry['result_dismissed'] = False
+            if terminal and not entry.get('result_dismissed'):
+                out[('result', 'className')] = 'overlay result-overlay is-open'
+                out[('result-body', 'children')] = result_body(snapshot, rules)
+            else:
+                out[('result', 'className')] = 'overlay result-overlay'
             return [out[key] for key in OUTPUT_SPEC]
 
     @app.callback(Output('remaining', 'children'), Output('remaining', 'className'),
                   Output('gauge-fill', 'style'), Output('gauge-text', 'children'),
                   Output('cost-text', 'children'),
-                  Output('allocate', 'disabled'),
+                  Output('allocate', 'disabled'), Output('primary', 'disabled'),
                   *[Output(f'w{index}-out', 'children') for index in range(3)],
                   *[Input(f'w{index}', 'value') for index in range(3)],
                   Input('game-revision', 'data'),
@@ -577,17 +774,26 @@ def create_app(round_factory=create_round):
         balanced = abs(remaining) <= TOLERANCE
         badge = 'BALANCED' if balanced else f'{remaining:+.0f}%'
         badge_class = 'remaining ok' if balanced else 'remaining bad'
-        blank = ({'width': '0%', 'background': DIM}, '—',
-                 'Weights must total 100% before you can confirm.', True, *readouts)
         with lock:
             entry = sessions.get(sid)
-            if entry is None or not balanced:
-                return (badge, badge_class, *blank)
-            game = entry['game']
+            game = entry['game'] if entry else None
+
+            def primary_blocked(confirm_blocked):
+                # The header button only means Confirm during setup. Once the round
+                # is live it means PLAY/PAUSE, which unbalanced sliders must not lock.
+                return confirm_blocked if game is not None and game.status == 'setup' else False
+
+            def blank(confirm_blocked=True):
+                return (badge, badge_class, {'width': '0%', 'background': DIM}, '—',
+                        'Weights must total 100% before you can confirm.',
+                        confirm_blocked, primary_blocked(confirm_blocked), *readouts)
+
+            if game is None or not balanced:
+                return blank()
             try:
                 _, risk, cost, net = game.preview([value / 100 for value in values])
             except (ValueError, TypeError):
-                return (badge, badge_class, *blank)
+                return blank()
             ceiling = game.rules.risk_cap
             over = risk > ceiling + 1e-10
             colour = DOWN if over else (WARN if risk > ceiling * .8 else UP)
@@ -597,7 +803,7 @@ def create_app(round_factory=create_round):
                          'Above the ceiling. Lower the riskiest weight to continue.')
             blocked = over or game.status not in ('setup', 'paused')
             return (badge, badge_class, {'width': f'{width:.1f}%', 'background': colour},
-                    text, cost_text, blocked, *readouts)
+                    text, cost_text, blocked, primary_blocked(blocked), *readouts)
 
     @app.callback(*[Output(f'w{index}', 'value', allow_duplicate=True) for index in range(3)],
                   Input('preset-equal', 'n_clicks'), Input('preset-min', 'n_clicks'),
@@ -637,7 +843,31 @@ def create_app(round_factory=create_round):
     def set_speed(value):
         return int(value or 1000)
 
+    @app.callback(Output('page-home', 'className'), Output('page-game', 'className'),
+                  Output('clock', 'disabled', allow_duplicate=True),
+                  Input('url', 'pathname'), State('session', 'data'),
+                  prevent_initial_call='initial_duplicate')
+    def route(pathname, sid):
+        """Swap pages, and freeze the market whenever the board is not on screen.
+
+        The game is not mutated, so the status pill stays truthful; the browser
+        simply stops ticking while you are reading the home page, and picks the
+        clock back up if the round was still running when you left.
+        """
+        if not is_play_path(pathname):
+            return 'page is-active', 'page', True
+        with lock:
+            entry = sessions.get(sid)
+            running = bool(entry and entry['game'].status == 'running')
+        return 'page', 'page is-active', not running
+
     return app
+
+
+def is_play_path(pathname):
+    """True for the game route. Adding a second game means extending this."""
+    cleaned = (pathname or '/').rstrip('/') or '/'
+    return cleaned in (PLAY_PATH, f'{PLAY_PATH}/portfolio-challenge')
 
 
 def main():

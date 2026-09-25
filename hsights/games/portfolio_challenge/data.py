@@ -46,6 +46,26 @@ PANEL_PATH = Path(os.environ.get('HSIGHTS_PRICE_PANEL', PACKAGE_DATA / 'prices.p
 MAXIMUM_TRIO_ATTEMPTS = 200
 CANDIDATE_BATCH = 30
 
+#: Buy-and-hold reference drawn on the return chart. Overridable now; a
+#: per-player choice can be layered on top later without touching the engine.
+BENCHMARK_SYMBOL = os.environ.get('HSIGHTS_BENCHMARK', 'SPY')
+
+
+def benchmark_symbol():
+    """The reference symbol if we hold history for it, else None.
+
+    SPY is an ETF, not an index constituent, so a panel built purely from a
+    membership list will not contain it. Rebuild with
+    ``--extra-symbols SPY`` to add it; until then the chart simply has no
+    reference line rather than the round failing.
+    """
+    if not BENCHMARK_SYMBOL:
+        return None
+    panel = price_panel()
+    if panel is None:
+        return BENCHMARK_SYMBOL          # live path can fetch it on demand
+    return BENCHMARK_SYMBOL if BENCHMARK_SYMBOL in panel.columns else None
+
 
 @lru_cache(maxsize=1)
 def price_panel():
@@ -175,14 +195,24 @@ def create_round(start='2022-01-03', seed=42, rules=Rules(), refresh=False,
             raise ValueError('End must be after start and before today; future prices '
                              'are unavailable.')
     pool = available_symbols(universe)
-    candidates = [symbol for symbol in pool if symbol not in exclude]
+    reference = benchmark_symbol()
+    # The reference is never tradeable in the round it is measuring.
+    candidates = [symbol for symbol in pool
+                  if symbol not in exclude and symbol != reference]
     if len(candidates) < 3:
         raise ValueError('Not enough different assets available.')
     # A random batch keeps the feasibility search small even for a 443-name pool.
     tickers = Random(seed).sample(candidates, min(CANDIDATE_BATCH, len(candidates)))
-    prices = load_prices(start, rules, refresh, tickers=tickers, end_date=end_date)
+    requested = tickers + ([reference] if reference else [])
+    frame = load_prices(start, rules, refresh, tickers=requested, end_date=end_date)
+    benchmark = frame[reference] if reference and reference in frame else None
+    if benchmark is not None and not np.isfinite(benchmark.to_numpy()).all():
+        benchmark, reference = None, None     # cosmetic only; never fail the round
+    prices = frame[tickers]
     if end_date:
         prices = prices.loc[:end_date]
+        if benchmark is not None:
+            benchmark = benchmark.loc[:end_date]
         boundary = int(prices.index.searchsorted(start))
         horizon = len(prices) - 1 - boundary
         if horizon < 1:
@@ -207,10 +237,13 @@ def create_round(start='2022-01-03', seed=42, rules=Rules(), refresh=False,
         if risk > rules.risk_cap + 1e-10:
             continue
         # Missing future data is an error, not a reason to cherry-pick another trio.
-        sample = sample.iloc[boundary - rules.lookback:boundary + rules.horizon + 1]
+        window = slice(boundary - rules.lookback, boundary + rules.horizon + 1)
+        sample = sample.iloc[window]
         if sample.isna().any().any():
             raise ValueError('Selected assets have missing prices in this round. No prices '
                              'were filled. Try another date.')
-        return Game(sample, start, rules)
+        reference_window = benchmark.iloc[window] if benchmark is not None else None
+        return Game(sample, start, rules, benchmark=reference_window,
+                    benchmark_symbol=reference)
     raise ValueError('No eligible trio in this draw meets the risk ceiling. Draw new '
                      'assets, raise the ceiling or change the date.')

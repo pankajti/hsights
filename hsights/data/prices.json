@@ -1,7 +1,10 @@
 {
   "source": "csv:recommended_common_history.csv.gz",
   "built": "2026-09-25",
-  "symbols": 443,
+  "symbols": 444,
+  "extra_symbols": [
+    "SPY"
+  ],
   "rows": 3771,
   "start": "2011-07-21",
   "end": "2026-07-21",

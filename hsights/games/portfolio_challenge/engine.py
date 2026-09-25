@@ -46,7 +46,7 @@ def minimum_risk(covariance):
 
 
 class Game:
-    def __init__(self, prices, start, rules=Rules()):
+    def __init__(self, prices, start, rules=Rules(), benchmark=None, benchmark_symbol=None):
         self.rules = rules
         self.prices = prices.copy().astype(float)
         if (len(prices.columns) != 3 or not prices.index.is_unique
@@ -58,6 +58,20 @@ class Game:
         self.start = int(self.prices.index.searchsorted(pd.Timestamp(start)))
         if self.start < rules.lookback or self.start + rules.horizon >= len(prices):
             raise ValueError('Insufficient lookback or future coverage for this challenge.')
+        # Buy-and-hold reference, held in full server-side and revealed only one
+        # day at a time through the recorded history, exactly like the prices.
+        self.benchmark_symbol = benchmark_symbol
+        self._benchmark = None
+        if benchmark is not None and benchmark_symbol:
+            series = np.asarray(benchmark, dtype=float)
+            if (len(series) == len(self.prices) and np.isfinite(series).all()
+                    and (series > 0).all()):
+                self._benchmark = series
+            else:
+                # A cosmetic overlay must never stop a round from being playable.
+                self.benchmark_symbol = None
+        elif benchmark is None:
+            self.benchmark_symbol = None
         self.assisted = False
         self._states = {}
         self._reset()
@@ -138,10 +152,18 @@ class Game:
         else:
             self.reason = 'Stay above the loss floor and below the risk ceiling.'
 
+    @property
+    def benchmark_return(self):
+        """Buy-and-hold return of the reference from day 0 to today, gross of costs."""
+        if self._benchmark is None:
+            return None
+        return float(self._benchmark[self.position]/self._benchmark[self.start]-1)
+
     def record(self):
         row = dict(day=self.position-self.start, date=str(self.prices.index[self.position].date()),
                    value=self.value, total_return=self.value/self.rules.capital-1,
-                   risk=volatility(self.weights, self.covariance()), weights=self.weights.tolist(), fees=self.fees)
+                   risk=volatility(self.weights, self.covariance()), weights=self.weights.tolist(),
+                   fees=self.fees, benchmark_return=self.benchmark_return)
         if self.history and self.history[-1]['day'] == row['day']:
             self.history[-1] = row
         else:
@@ -223,6 +245,8 @@ class Game:
         window = self.returns.iloc[self.position-self.rules.lookback+1:self.position+1]
         return dict(status=self.status, reason=self.reason,
                     assisted=self.assisted, can_rewind=self.can_rewind,
+                    benchmark_symbol=self.benchmark_symbol,
+                    benchmark_return=self.benchmark_return,
                     day=self.position-self.start, date=str(self.prices.index[self.position].date()),
                     tickers=list(self.prices.columns), weights=self.weights.tolist(), value=self.value,
                     total_return=self.value/self.rules.capital-1,

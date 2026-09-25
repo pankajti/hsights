@@ -34,6 +34,40 @@ class DataTests(unittest.TestCase):
         self.assertEqual(game.rules.horizon,4)
         self.assertEqual(str(game.prices.index[-1].date()),'2020-01-10')
 
+    def test_benchmark_is_attached_and_excluded_from_the_tradeable_pool(self):
+        universe = tuple(f'S{index}' for index in range(12)) + ('SPY',)
+        captured = {}
+
+        def download(start, rules, refresh, **kwargs):
+            captured.update(kwargs)
+            frame = pd.DataFrame(100., index=pd.bdate_range('2020-01-01', periods=15),
+                                 columns=kwargs['tickers'])
+            frame['SPY'] = [100. + index for index in range(15)]
+            return frame
+
+        with patch('hsights.games.portfolio_challenge.data.available_symbols',
+                   return_value=universe), \
+             patch('hsights.games.portfolio_challenge.data.benchmark_symbol',
+                   return_value='SPY'), \
+             patch('hsights.games.portfolio_challenge.data.load_prices',
+                   side_effect=download):
+            game = create_round('2020-01-06', rules=Rules(lookback=3, horizon=3),
+                                universe='sp500')
+        self.assertIn('SPY', captured['tickers'])
+        self.assertNotIn('SPY', game.prices.columns)   # never tradeable
+        self.assertEqual(game.snapshot()['benchmark_symbol'], 'SPY')
+        self.assertAlmostEqual(game.snapshot()['benchmark_return'], 0.0)
+
+    def test_round_still_works_without_a_benchmark(self):
+        frame = pd.DataFrame(100., index=pd.bdate_range('2020-01-01', periods=15),
+                             columns=['A', 'B', 'C'])
+        with patch('hsights.games.portfolio_challenge.data.benchmark_symbol',
+                   return_value=None), \
+             patch('hsights.games.portfolio_challenge.data.load_prices', return_value=frame):
+            game = create_round(str(frame.index[4].date()), 42, Rules(lookback=3, horizon=3))
+        self.assertIsNone(game.snapshot()['benchmark_symbol'])
+        self.assertIsNone(game.snapshot()['benchmark_return'])
+
     def test_invalid_end_date(self):
         with self.assertRaises(ValueError):
             create_round('2020-01-06',end_date='2020-01-01')
