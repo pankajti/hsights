@@ -12,16 +12,17 @@ from threading import RLock
 from time import monotonic
 from uuid import uuid4
 
-if not __package__:
+if __package__ in (None, ''):
+    # Running this file directly puts only its own directory on sys.path.
+    # Add the repository root so the absolute imports below resolve.
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    __package__ = 'hsights.games.portfolio_challenge'
 
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
 
-from ...config import HOST, PORT, SESSION_LIMIT, SESSION_TTL_SECONDS
-from .data import create_round
-from .engine import Rules, minimum_risk
+from hsights.config import HOST, PORT, SESSION_LIMIT, SESSION_TTL_SECONDS
+from hsights.games.portfolio_challenge.data import create_round
+from hsights.games.portfolio_challenge.engine import Rules, minimum_risk
 
 INK = '#e8eefc'
 MUTED = '#7d8db1'

@@ -31,6 +31,29 @@ Run the tests:
 python -m unittest discover -s tests -t . -v
 ```
 
+Every module uses absolute imports and adds the repository root to `sys.path`
+when run as a script, so `python hsights/server.py` and an IDE's run button
+work without an editable install.
+
+### Pinning the environment
+
+`requirements.txt` is curated by hand — it is the minimum the web service needs,
+and it deliberately omits `yfinance`. For an exact reproduction of a working
+environment:
+
+```bash
+./scripts/freeze.sh                     # -> requirements-lock.txt
+```
+
+Do not use plain `pip freeze` for this. With an editable install it writes
+`-e /Users/you/dev/git/hsights` and `hsights @ file:///Users/you/...`, and in a
+conda environment it writes locally built wheels as
+`pandas @ file:///opt/anaconda3/conda-bld/...`. All three are absolute paths to
+your machine and all three break the Render build. `scripts/freeze.sh` uses
+`pip list --format=freeze`, which always emits `name==version`, so conda-built
+packages stay as real pins instead of being silently dropped — and it exits
+non-zero if any local path survives.
+
 ---
 
 ## Deploying to Render

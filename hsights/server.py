@@ -13,10 +13,18 @@ the only game; moving it under a prefix means giving its Dash app a matching
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+import sys
 
-from .config import HOST, PORT, SINGLE_INSTANCE
-from .games.portfolio_challenge.app import create_app
-from .games.portfolio_challenge.data import panel_span, price_panel
+if __package__ in (None, ''):
+    # Running this file directly (python hsights/server.py, or the green arrow
+    # in an IDE) puts only this directory on sys.path. Add the repository root
+    # so the absolute imports below resolve without an editable install.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from hsights.config import HOST, PORT, SINGLE_INSTANCE
+from hsights.games.portfolio_challenge.app import create_app
+from hsights.games.portfolio_challenge.data import panel_span, price_panel
 
 LOGGER = logging.getLogger(__name__)
 

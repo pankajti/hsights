@@ -22,12 +22,16 @@ from time import time
 from urllib.request import Request, urlopen
 import hashlib
 import os
+import sys
 import tempfile
 
 import numpy as np
 import pandas as pd
 
-from .engine import Game, Rules, minimum_risk
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from hsights.games.portfolio_challenge.engine import Game, Rules, minimum_risk
 
 # A deliberately small, disclosed present-day survivor universe, all USD US listings.
 UNIVERSE = ('AAPL', 'MSFT', 'IBM', 'JPM', 'KO', 'PG', 'JNJ', 'WMT', 'XOM', 'CVX', 'CAT', 'MCD')

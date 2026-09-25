@@ -22,9 +22,13 @@ import argparse
 from datetime import date
 from pathlib import Path
 import json
+import sys
 
 import numpy as np
 import pandas as pd
+
+# Run directly (python scripts/build_price_panel.py) without an editable install.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / 'hsights' / 'data' / 'prices.parquet'
 MINIMUM_SYMBOLS = 40
