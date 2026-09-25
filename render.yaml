@@ -1,0 +1,37 @@
+# Render blueprint. Create the service from this file, or mirror these
+# settings by hand in the dashboard.
+#
+# Two constraints are not negotiable while game state lives in process memory:
+#   * exactly one worker  - a second worker gets its own empty session table
+#   * exactly one instance - Render has no sticky sessions, so a second
+#     instance would serve half a player's requests from a process that has
+#     never heard of their game
+# Fixing that means moving sessions to Render Key Value first.
+services:
+  - type: web
+    name: hsights
+    runtime: python
+    plan: starter            # do not use free: it spins down after 15 min idle
+    region: oregon           # pick the region closest to your players
+    branch: main
+    numInstances: 1          # see note above before raising this
+    healthCheckPath: /healthz
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      gunicorn hsights.server:application
+      --bind 0.0.0.0:$PORT
+      --workers 1
+      --threads 8
+      --timeout 120
+      --graceful-timeout 30
+      --access-logfile -
+      --error-logfile -
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: HSIGHTS_SESSION_LIMIT
+        value: "100"
+      - key: HSIGHTS_SESSION_TTL
+        value: "7200"

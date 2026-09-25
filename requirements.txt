@@ -1,0 +1,10 @@
+# Runtime dependencies for the Render web service.
+# yfinance is deliberately absent: the deployed app reads the bundled
+# price panel and never calls Yahoo on the request path.
+numpy>=1.26,<3
+pandas>=2,<4
+scipy>=1.11,<2
+dash>=3,<5
+plotly>=5.18,<7
+pyarrow>=15,<22
+gunicorn>=22,<24

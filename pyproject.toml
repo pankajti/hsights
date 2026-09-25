@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hsights"
+version = "0.1.0"
+description = "Hindsight - playable market simulations built on real historical data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Pankaj Kumar" }]
+keywords = ["finance", "simulation", "game", "portfolio", "dash"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Framework :: Dash",
+]
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2,<4",
+    "scipy>=1.11,<2",
+    "dash>=3,<5",
+    "plotly>=5.18,<7",
+    "pyarrow>=15,<22",
+    "gunicorn>=22,<24",
+]
+
+[project.optional-dependencies]
+# Only needed to rebuild the bundled price panel; not used at runtime.
+data = ["yfinance>=0.2.54,<2"]
+dev = ["yfinance>=0.2.54,<2"]
+
+[project.scripts]
+hsights = "hsights.server:main"
+portfolio-challenge = "hsights.games.portfolio_challenge.app:main"
+
+[project.urls]
+Homepage = "https://hsights.com"
+Source = "https://github.com/pankajti/hsights"
+
+[tool.setuptools.packages.find]
+include = ["hsights*"]
+
+[tool.setuptools.package-data]
+"hsights.games.portfolio_challenge" = ["assets/*.css", "assets/*.js", "assets/icons/*.svg"]
+"hsights" = ["data/*.parquet", "data/*.json"]

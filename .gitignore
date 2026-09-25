@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+.idea/
+.vscode/
+.DS_Store
+
+# Local price caches. The committed panel under hsights/data is intentional.
+/tmp/
+*.tmp
+hsights-cache/

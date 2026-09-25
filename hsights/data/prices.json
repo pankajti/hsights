@@ -1,0 +1,14 @@
+{
+  "source": "csv:recommended_common_history.csv.gz",
+  "built": "2026-09-25",
+  "symbols": 443,
+  "rows": 3771,
+  "start": "2011-07-21",
+  "end": "2026-07-21",
+  "prices_auto_adjusted": true,
+  "caveats": [
+    "Yahoo/yfinance is an unofficial data source.",
+    "A current S&P membership list introduces survivorship bias.",
+    "Adjusted closes approximate reinvested total returns, not executable prices."
+  ]
+}
