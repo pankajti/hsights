@@ -32,6 +32,14 @@ python -m pip list --format=freeze "${ARGS[@]}" \
   | sort -f \
   > "$OUTPUT"
 
+# gunicorn runs the app but is never imported by it, so a development
+# environment often lacks it and the freeze silently omits it. The Render
+# start command then fails with "gunicorn: command not found".
+if ! grep -qiE '^gunicorn[=<>~]' "$OUTPUT"; then
+  echo "gunicorn>=22,<24" >> "$OUTPUT"
+  echo "note: gunicorn was not installed locally; pinned it in $OUTPUT anyway." >&2
+fi
+
 echo "wrote $OUTPUT ($(wc -l < "$OUTPUT" | tr -d ' ') packages)"
 
 if grep -qE 'file://|^-e |/Users/|/home/|[A-Za-z]:\\' "$OUTPUT"; then

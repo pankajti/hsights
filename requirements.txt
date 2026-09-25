@@ -1,3 +1,9 @@
+# Frozen from the local conda environment.
+# gunicorn is the production WSGI server named in the Render start command;
+# it is not importable by the app, so a freeze of a dev env will not include it
+# unless it is installed there. Do not remove it.
+gunicorn==23.0.0
+
 annotated-types==0.8.0
 beautifulsoup4==4.15.0
 blinker==1.9.0
