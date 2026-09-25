@@ -64,8 +64,9 @@ these by hand:
 | Setting | Value |
 | --- | --- |
 | Runtime | Python 3.12 |
-| Build command | `pip install -r requirements.txt` |
-| Start command | `gunicorn hsights.server:application --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120` |
+| Language | **Python 3** (Render may auto-detect Go — change it) |
+| Build command | `pip install -r requirements.txt && python -c "import gunicorn"` |
+| Start command | `python -m gunicorn hsights.server:application --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120` |
 | Health check path | `/healthz` |
 | Instances | **1** |
 | Plan | Starter or above |
@@ -86,6 +87,19 @@ deletes every game in progress.
 **Bind `0.0.0.0` and read `$PORT`.** Render injects `PORT` and fails the deploy
 if it cannot detect a bound port. `hsights/config.py` reads both from the
 environment.
+
+### `gunicorn: command not found` (exit 127)
+
+The build succeeded but the deployed commit's `requirements.txt` had no
+`gunicorn` in it. gunicorn *runs* the app rather than being imported by it, so
+nothing in the dependency graph pulls it in and a freeze of a development
+environment will omit it unless it happens to be installed there.
+
+Check the commit SHA on the Render deploy against your pushed `HEAD` — the usual
+cause is deploying before pushing the fix. The build command above now imports
+gunicorn explicitly so this fails at build time with a clear message instead of
+restart-looping, and the start command uses `python -m gunicorn` so it does not
+depend on the console script being on `PATH`.
 
 ### Capacity
 

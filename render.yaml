@@ -16,9 +16,14 @@ services:
     branch: main
     numInstances: 1          # see note above before raising this
     healthCheckPath: /healthz
-    buildCommand: pip install -r requirements.txt
+    # Fail at build time if gunicorn is missing, rather than looping on
+    # "gunicorn: command not found" after a successful build.
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      python -c "import gunicorn, dash, pandas, pyarrow; print('deps ok', gunicorn.__version__)"
+    # `python -m gunicorn` does not depend on the console script being on PATH.
     startCommand: >-
-      gunicorn hsights.server:application
+      python -m gunicorn hsights.server:application
       --bind 0.0.0.0:$PORT
       --workers 1
       --threads 8
