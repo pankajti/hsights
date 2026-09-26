@@ -40,3 +40,19 @@ services:
         value: "100"
       - key: HSIGHTS_SESSION_TTL
         value: "7200"
+      # Traction analytics. The events file must live on the persistent disk
+      # below, or every deploy wipes the history you are using to decide
+      # which game to build out.
+      - key: HSIGHTS_EVENTS_DB
+        value: /var/data/hsights-events.sqlite3
+      # Set these two in the dashboard, not here: both are secrets.
+      #   HSIGHTS_ADMIN_TOKEN  unlocks /admin/traction?token=...
+      #   HSIGHTS_DAILY_SALT   stops anyone computing tomorrow's puzzles from the source
+      - key: HSIGHTS_ADMIN_TOKEN
+        sync: false
+      - key: HSIGHTS_DAILY_SALT
+        sync: false
+    disk:
+      name: hsights-data
+      mountPath: /var/data
+      sizeGB: 1

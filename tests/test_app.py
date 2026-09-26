@@ -12,7 +12,11 @@ class AppTests(unittest.TestCase):
         from hsights.games.portfolio_challenge.app import create_app
 
         def factory(start, seed, rules, **kwargs):
-            frame = pd.DataFrame(np.full((510, 3), 100.),
+            # A gentle, deterministic climb: enough to clear the 10 bps entry fee
+            # so a 0% target is winnable, nowhere near enough to clear 10%.
+            # Deterministic growth has zero variance, so estimated risk stays 0.
+            path = 100. * 1.001 ** np.arange(510)
+            frame = pd.DataFrame(np.repeat(path[:, None], 3, axis=1),
                                  index=pd.bdate_range('2020-01-01', periods=510),
                                  columns=['AAA', 'BBB', 'CCC'])
             return Game(frame, frame.index[252], rules)
@@ -62,10 +66,10 @@ class AppTests(unittest.TestCase):
                             for output in (callback['output']
                                            if isinstance(callback['output'], list)
                                            else [callback['output']])))['callback'].__wrapped__
-        home, game, clock = route('/', 'test-session')
+        home, game, clock = route('/', '', 'test-session')
         self.assertEqual((home, game), ('page is-active', 'page'))
         self.assertTrue(clock, 'the market must not tick while the board is hidden')
-        home, game, clock = route('/play', 'test-session')
+        home, game, clock = route('/play', '?src=hub&pos=2', 'test-session')
         self.assertEqual((home, game), ('page', 'page is-active'))
         self.assertTrue(clock, 'no round yet, so the clock stays off')
 
@@ -81,8 +85,8 @@ class AppTests(unittest.TestCase):
                             for output in (callback['output']
                                            if isinstance(callback['output'], list)
                                            else [callback['output']])))['callback'].__wrapped__
-        self.assertTrue(route('/', 'test-session')[2], 'leaving the board freezes it')
-        self.assertFalse(route('/play', 'test-session')[2], 'returning resumes it')
+        self.assertTrue(route('/', '', 'test-session')[2], 'leaving the board freezes it')
+        self.assertFalse(route('/play', '?src=hub&pos=2', 'test-session')[2], 'returning resumes it')
 
     def test_static_routes(self):
         for path in ('/', '/_dash-layout', '/_dash-dependencies',

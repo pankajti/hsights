@@ -5,9 +5,18 @@ process, so the service must run a single worker with threads — never
 multiple workers, and never more than one instance behind a load balancer
 without sticky sessions.
 
-The single Dash app serves the hub landing page at ``/`` and the board at
-``/play``, swapped client-side by ``dcc.Location``. Dash registers a catch-all
-index route, so a direct request or a refresh on ``/play`` is served too.
+One Flask server hosts every game:
+
+    /                  the hub (shares a Dash app with Portfolio Challenge)
+    /play              Portfolio Challenge, swapped in client-side
+    /noise-hunt/       Noise Hunt
+    /real-or-random/   Real or Random?
+    /star-manager/     The Star Manager
+    /admin/traction    per-game funnel, when HSIGHTS_ADMIN_TOKEN is set
+
+Each game after the first is its own Dash app under its own path, so component
+ids and callbacks never collide and a game can be added or removed without
+touching the others.
 """
 from __future__ import annotations
 
@@ -21,9 +30,22 @@ if __package__ in (None, ''):
     # so the absolute imports below resolve without an editable install.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from hsights.common import analytics
+from hsights.common.ui import ensure_common_route
 from hsights.config import HOST, PORT, SINGLE_INSTANCE
 from hsights.games.portfolio_challenge.app import create_app
 from hsights.games.portfolio_challenge.data import panel_span, price_panel
+from hsights.ui.noise_hunt.app import create_app as create_noise_hunt
+from hsights.ui.real_or_random.app import create_app as create_real_or_random
+from hsights.ui.star_manager.app import create_app as create_star_manager
+
+#: Games mounted beside the hub, by path. Order does not matter: the hub
+#: shuffles its tiles on every visit.
+MOUNTED_GAMES = (
+    ('/noise-hunt/', create_noise_hunt),
+    ('/real-or-random/', create_real_or_random),
+    ('/star-manager/', create_star_manager),
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +54,18 @@ def create_server():
     """Return the Flask WSGI application with every game mounted."""
     dash_app = create_app()
     server = dash_app.server
+    ensure_common_route(server)
+    analytics.install(server)
+    for prefix, factory in MOUNTED_GAMES:
+        factory(server=server, prefix=prefix)
+
+        # /noise-hunt without the slash would otherwise fall through to the
+        # hub's catch-all and render the home page.
+        def slash(prefix=prefix):
+            from flask import redirect, request
+            query = request.query_string.decode()
+            return redirect(prefix + (f'?{query}' if query else ''), code=308)
+        server.add_url_rule(prefix.rstrip('/'), f'slash{prefix.strip("/")}', slash)
 
     @server.get('/healthz')
     def healthz():
