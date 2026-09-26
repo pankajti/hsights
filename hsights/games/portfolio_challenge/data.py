@@ -208,7 +208,15 @@ def create_round(start='2022-01-03', seed=42, rules=Rules(), refresh=False,
     benchmark = frame[reference] if reference and reference in frame else None
     if benchmark is not None and not np.isfinite(benchmark.to_numpy()).all():
         benchmark, reference = None, None     # cosmetic only; never fail the round
-    prices = frame[tickers]
+    # Use the tradeable columns the loader actually returned. It normally hands
+    # back exactly what was asked for, but selecting blindly would turn any
+    # mismatch into a KeyError instead of a playable round.
+    tradeable = [symbol for symbol in tickers if symbol in frame.columns]
+    if not tradeable:
+        tradeable = [column for column in frame.columns if column != reference]
+    if len(tradeable) < 3:
+        raise ValueError('The price source returned fewer than three usable assets.')
+    prices = frame[tradeable]
     if end_date:
         prices = prices.loc[:end_date]
         if benchmark is not None:

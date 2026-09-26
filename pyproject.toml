@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Pankaj Kumar" }]
-keywords = ["finance", "simulation", "game", "portfolio", "dash"]
+keywords = ["finance", "simulation", "game", "portfolio", "dash", "statistics"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -45,3 +45,7 @@ include = ["hsights*"]
 [tool.setuptools.package-data]
 "hsights.games.portfolio_challenge" = ["assets/*.css", "assets/*.js", "assets/icons/*.svg"]
 "hsights" = ["data/*.parquet", "data/*.json"]
+"hsights.common" = ["assets/*.css"]
+"hsights.ui.noise_hunt" = ["assets/*.css"]
+"hsights.ui.real_or_random" = ["assets/*.css"]
+"hsights.ui.star_manager" = ["assets/*.css"]

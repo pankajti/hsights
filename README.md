@@ -1,38 +1,74 @@
 # Hindsight
 
-Playable market simulations built on real historical data. Live at **[hsights.com](https://hsights.com)**.
+Short games about how markets fool people, built on real prices and honest
+statistics. Live at **[hsights.com](https://hsights.com)**.
 
-`/` is the landing page — what the game is, how to play, the rules, and the
-honest limits. `/play` is the board; the wordmark in its header goes back home
-and your round is kept while you are away.
+`/` is the hub: four game tiles, **shuffled on every visit** so no game gets the
+top-left slot for free. The point of the hub right now is to find out which game
+people actually play, finish, share and come back to, and then build that one
+out. See [Measuring traction](#measuring-traction).
 
-Hindsight is the hub; each game lives under `hsights/games/`. The first is
-**Portfolio Challenge**: you are handed three anonymous-until-drawn equities and
-$100,000, you set the weights, and then real market history replays one trading
-day per tick. Stay above the loss floor, stay below the volatility ceiling, and
-meet the return target before the deadline.
+| Game | Path | Lesson | Data |
+| --- | --- | --- | --- |
+| **Noise Hunt** | `/noise-hunt/` | Why most backtests lie | Synthetic, daily puzzle |
+| **Real or Random?** | `/real-or-random/` | How random real prices look | Real closes, daily puzzle |
+| **The Star Manager** | `/star-manager/` | Skill, luck and fees | Synthetic, daily puzzle |
+| **Portfolio Challenge** | `/play` | Risk you cannot sit out | Real history |
 
-The header carries one context-aware primary button that always states the next
-move: **Confirm allocation → Play → Pause → Play again**. It dispatches to the same
-engine calls as the dock and transport rows, so every guard still applies; it is a
-shortcut for new players, not a second code path. Confirm deliberately *also* stays
-beside the allocation sliders, where proximity makes it obvious what it commits.
+Every game follows the same rules: whatever the player is trying to predict stays
+on the server until they commit, the ending scores them against what chance alone
+would produce, and each game states its own limits.
 
-A dashed **SPY** buy-and-hold line is drawn on the return chart, with a `VS SPY`
-tile in the header showing your excess return. Like the prices, the benchmark is
-held server-side and revealed one day at a time through the played history, so it
-cannot leak a value you have not reached. It is gross of trading costs, where your
-own return is net of them. Override the symbol with `HSIGHTS_BENCHMARK`; a
-per-player choice can be layered on later without touching the engine.
+### Noise Hunt
 
-When the round ends, a result modal rises from the centre of the screen with the
-final score, a peak and drawdown summary, and three ways out: **Play again**
-(restart the same round), **New round** (open settings), **View board** (dismiss
-and inspect the final chart). It appears once per game over and stays dismissed.
+Search a price series for a trading rule (moving-average cross, breakout, mean
+reversion) with a good Sharpe ratio, then **bet on whether the edge is real**
+(10-90%) before the last 40% of the series is unsealed. About 4 in 10 series hide
+a real edge - short-term reversal or trends that flip every couple of months -
+and the rest are pure random walks. The bet is scored with a Brier rule (100 for
+a confident correct call, 75 for 50%, 19 for a confident wrong one), and the
+reveal compares the best rule against the best Sharpe expected from that many
+tries on noise (the deflated Sharpe ratio of Bailey and Lopez de Prado).
 
+The null benchmark caps the spread of trial Sharpes at the sampling error of a
+single Sharpe. Without that cap a real edge inflates the spread and raises its
+own bar: before the fix a planted edge with an out-of-sample Sharpe of 2 was
+reported as found about 2% of the time. With it, a full sweep finds planted
+edges about 70% of the time and flags pure noise essentially never.
+`tests/test_noise_hunt.py` holds that calibration in place.
+
+### Real or Random?
+
+Ten rounds. Each shows two unlabeled charts rescaled to start at 100: a window of
+a real S&P 500 stock, and a random walk with the same average daily return and
+volatility. Pick the real one; the stock and dates are revealed after each
+guess. The final score says how often a coin would do at least as well.
+
+### The Star Manager
+
+Two hundred simulated fund managers with three years of track record: return,
+volatility, Sharpe, drawdown, versus the index. Hire up to three, or buy the
+index. Then years 4-6 are unsealed. Zero to five managers have a real 4% a year
+edge; everyone charges 1% a year. Over 200 universes, hiring the three best past
+performers beats the index about 38% of the time.
+
+### Portfolio Challenge
+
+You are handed three S&P 500 stocks and $100,000, you set the weights, and real
+market history replays one trading day per tick. Stay above the loss floor, stay
+below the volatility ceiling, and meet the return target before the deadline. A
+dashed **SPY** buy-and-hold line runs alongside, revealed one day at a time.
 Keyboard: `Space` plays or pauses, `→` steps one day, `S` opens settings, `Esc`
-closes the result modal or the settings sheet. Shortcuts click the real buttons,
-so a disabled button stays inert and neither sheet leaks keys to the board.
+closes the result modal or the settings sheet.
+
+### Daily puzzles and sharing
+
+Noise Hunt, Real or Random? and The Star Manager default to **today's puzzle**:
+the same round for everyone, changing at 00:00 UTC, seeded from
+`HSIGHTS_DAILY_SALT` + game + date. The source is public, so **set the salt to a
+secret in production** or anyone can compute tomorrow's puzzle. A practice mode
+draws a fresh random round. Finishing a round shows a spoiler-free result with
+**Copy result** and **Post on X** buttons.
 
 ---
 
@@ -129,6 +165,12 @@ depend on the console script being on `PATH`.
 
 ### Capacity
 
+Every game keeps its sessions in a `SessionStore` (`hsights/common/sessions.py`)
+with **one lock per session**. The global lock now guards only the dictionary,
+for microseconds, so one player's chart render no longer queues everybody else.
+Throughput is still bounded by the GIL and by one process; the figures below
+were measured before this change, with a single global lock, and are a floor.
+
 Measured on one core: the per-tick callback costs about 38 ms and 20 KB, and a
 single global lock serialises every request, so throughput does not improve with
 more cores in the process. That works out to roughly **26 concurrent players at
@@ -177,6 +219,42 @@ back to live yfinance downloads and `/healthz` reports `degraded`.
 
 ---
 
+## Measuring traction
+
+`hsights/common/analytics.py` records four events per game into one SQLite file:
+`view` (with `src=hub&pos=N` when it came from a hub tile), `start`, `complete`
+and `share`. Visitors get one random, HttpOnly cookie. No IP addresses, user
+agents, names or emails are stored, and obvious bots and headless browsers are
+ignored. Recording failures are logged and swallowed; analytics never breaks a
+game.
+
+Set `HSIGHTS_ADMIN_TOKEN` and open `/admin/traction?token=...` for the funnel,
+per game, over unique visitors:
+
+| Column | Meaning |
+| --- | --- |
+| HUB CTR | share of hub visitors who clicked this game's tile |
+| FINISH % | of those who started a round, how many finished one |
+| PLAYS / PLAYER | rounds finished per finishing player |
+| DAILY | players who finished today's puzzle rather than practice |
+| SHARE % | of finishers, how many copied or posted a result |
+| RETURN % | of visitors, how many played on two or more different days |
+
+It also shows click-through by tile *position*. Because the order is shuffled,
+a big gap between position 1 and the rest measures position bias rather than
+game appeal. Add `&days=7` or `&format=json` to the URL.
+
+What to watch, in order: SHARE % and RETURN % (the two things a launch cannot
+fake), then FINISH %, then HUB CTR (which mostly measures the tile copy).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HSIGHTS_EVENTS_DB` | system temp dir | SQLite file. On Render, put it on the persistent disk in `render.yaml` |
+| `HSIGHTS_ADMIN_TOKEN` | unset (report off) | unlocks `/admin/traction` |
+| `HSIGHTS_ANALYTICS` | `1` | `0` turns recording off |
+| `HSIGHTS_DAILY_SALT` | `hsights-dev` | secret that makes daily puzzles unpredictable |
+| `HSIGHTS_PUBLIC_URL` | `https://hsights.com` | link used in share text |
+
 ## Honest limits
 
 The game discloses these in the UI, and they belong here too.
@@ -203,37 +281,47 @@ The game discloses these in the UI, and they belong here too.
 ```
 hsights/
   config.py                     environment-driven settings
-  server.py                     WSGI entrypoint, /healthz, game mounting
+  server.py                     WSGI entrypoint: mounts every game, /healthz
+  home.py                       the hub (pure layout, shuffled tiles)
+  common/
+    sessions.py                 per-session-locked in-memory store
+    analytics.py                traction events, cookie, /admin/traction, /share/x
+    daily.py                    salted daily seeds
+    ui.py                       shared chrome, figure theme, share panel
+    assets/common.css           served at /common/common.css
+  games/                        domain logic only: no Dash, no Flask
+    noise_hunt/                 series, rules, backtest, stats, session + puzzle
+    real_or_random/             real windows vs matched random walks
+    star_manager/               managers, track records, the sealed half
+    portfolio_challenge/        engine, data and (historically) its Dash app
+  ui/                           one Dash app per game
+    noise_hunt/  real_or_random/  star_manager/
   data/prices.parquet           bundled adjusted closes
-  games/portfolio_challenge/
-    engine.py                   accounting, risk, rules, rewind checkpoints
-    data.py                     panel loading and seeded round selection
-    app.py                      Dash layout and callbacks
-    assets/                     stylesheet, keyboard transport, icons
 scripts/build_price_panel.py    regenerate the panel
-tests/                          engine, data and HTTP tests
+tests/                          domain, HTTP, hub and analytics tests
 ```
 
 ### Routing
 
-One Dash app serves both pages. `dcc.Location` drives a callback that swaps a
-class on two wrappers that are *both* permanently mounted, rather than rebuilding
-the layout per route. That is deliberate: every game component id stays in the
-DOM, so no callback needs `suppress_callback_exceptions`, and `dcc.Link`
-navigation never tears down a round in progress. The cost is that the landing
-page ships the game's DOM with it — fine for now, and the reason `hsights/home.py`
-is pure layout with no callbacks, so it can be lifted to a static CDN page later
-without touching the game.
+Portfolio Challenge and the hub share one Dash app at `/` and `/play`, swapped
+client-side by `dcc.Location`, so a round in progress survives a trip back to the
+hub. Its router callback also records hub and board views, because client-side
+navigation never reaches the server's page-load hook.
 
-The router also stops the market clock whenever the board is off screen, and
-picks it back up if the round was still running. It does not mutate the game, so
-the status pill stays truthful.
+Every other game is **its own Dash app mounted on the same Flask server** under
+its own path (`Dash(server=..., url_base_pathname='/noise-hunt/')`). Component
+ids and callbacks cannot collide between games, and each game can run alone:
 
-Adding a game: create `hsights/games/<name>/`, build its layout, mount it as a
-third page, and extend `is_play_path`. Longer term `create_app` belongs in
-`hsights/server.py` with each game exposing `layout()` and
-`register_callbacks(app)`; it lives in the game module today because there is
-only one game.
+```bash
+python -m hsights.ui.noise_hunt        # http://127.0.0.1:8092
+python -m hsights.ui.real_or_random    # :8093
+python -m hsights.ui.star_manager      # :8094
+```
+
+Adding a game: put the domain logic in `hsights/games/<name>/`, build a
+`create_app(server=None, prefix='/')` in `hsights/ui/<name>/app.py` with
+`hsights.common.ui.create_game_app`, add it to `MOUNTED_GAMES` in `server.py`,
+to `GAMES` in `home.py` and `analytics.py`, and to `PAGE_ROUTES`.
 
 ## Licence
 

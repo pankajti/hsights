@@ -1259,3 +1259,31 @@ input:focus, button:focus-visible, .segmented label:focus-within {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }
+
+/* -------------------------------------------------------------- hub: games */
+.hero-compact { padding: 44px 0 30px; }
+.game-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.game-card { display: flex; flex-direction: column; gap: 10px; padding: 22px 22px 20px;
+             text-decoration: none; color: var(--ink); border-radius: var(--radius);
+             background: linear-gradient(180deg, var(--panel-2), var(--panel));
+             border: 1px solid var(--line);
+             transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease; }
+.game-card:hover { border-color: var(--accent); transform: translateY(-2px);
+                   box-shadow: 0 10px 30px rgba(8, 11, 20, .5); }
+.game-card-head { display: flex; align-items: center; justify-content: space-between; }
+.game-badge { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .14em;
+              color: var(--up); border: 1px solid rgba(34, 211, 154, .45); border-radius: 6px;
+              padding: 4px 8px; }
+.game-card h3 { margin: 4px 0 0; font-size: 20px; letter-spacing: -.01em; }
+.game-hook { margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); flex: 1; }
+.game-meta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono);
+             font-size: 10px; letter-spacing: .08em; color: var(--dim); }
+.game-lesson::before { content: "LESSON · "; color: var(--accent); }
+.game-play { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
+             color: #9db6ff; margin-top: 4px; }
+.game-play .arrow { margin-left: 8px; transition: margin .15s ease; }
+.game-card:hover .game-play .arrow { margin-left: 14px; }
+@media (max-width: 760px) { .game-grid { grid-template-columns: minmax(0, 1fr); } }
+.game-card .icon-lg { width: 24px; height: 24px; }
+.wordmark .wordmark-alt.joined { margin-left: -8px; }
+.hero-compact .home-lede { margin-bottom: 14px; }

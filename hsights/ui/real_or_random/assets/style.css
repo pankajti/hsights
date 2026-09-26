@@ -1,0 +1,13 @@
+/* Real or Random? The shared look lives in /common/common.css. */
+.status { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.status .tiles { margin: 0; min-width: 300px; }
+.prompt { margin: 0; font-size: 15px; line-height: 1.6; }
+.prompt b { font-family: var(--mono); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pair .panel { display: grid; gap: 8px; padding: 12px; }
+.pair .panel.is-real { border-color: rgba(34,211,154,.6); }
+.pair .panel.is-fake { opacity: .8; }
+.feedback { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.feedback p { margin: 0; font-size: 14px; flex: 1; min-width: 240px; line-height: 1.6; }
+.feedback button { width: auto; min-width: 160px; }
+@media (max-width: 760px) { .pair { grid-template-columns: 1fr; } }

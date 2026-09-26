@@ -83,5 +83,8 @@ class DataTests(unittest.TestCase):
              patch('hsights.games.portfolio_challenge.data.load_prices',side_effect=download):
             game = create_round('2020-01-06',rules=Rules(lookback=3,horizon=3),
                                 universe='sp500',exclude=('S0','S1','S2'))
-        self.assertEqual(len(captured['tickers']),30)
+        # 30 sampled candidates, plus the benchmark appended for the chart.
+        self.assertEqual(len(captured['tickers']),31)
+        self.assertEqual(captured['tickers'][-1],'SPY')
         self.assertFalse(set(game.prices.columns) & {'S0','S1','S2'})
+        self.assertNotIn('SPY',game.prices.columns)

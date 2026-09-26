@@ -1,0 +1,12 @@
+/* The Star Manager. The shared look lives in /common/common.css. */
+.picked { display: grid; gap: 6px; }
+.picked .row { display: flex; justify-content: space-between; gap: 8px; font-family: var(--mono);
+               font-size: 11.5px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+               background: var(--bg); }
+.picked .row span:last-child { color: var(--up); }
+.table-wrap { padding: 4px 6px 10px; }
+.table-wrap .dash-spreadsheet-container .dash-spreadsheet-inner input[type="checkbox"] {
+  accent-color: var(--accent); }
+.dash-table-container .previous-next-container { color: var(--muted); font-family: var(--mono); }
+.dash-table-container .previous-next-container button { width: auto; padding: 4px 10px; }
+.dash-table-container .page-number input { background: var(--bg); color: var(--ink); }

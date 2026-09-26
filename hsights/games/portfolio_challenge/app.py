@@ -9,7 +9,7 @@ from math import ceil, floor
 from pathlib import Path
 import sys
 from threading import RLock
-from time import monotonic
+from urllib.parse import parse_qs
 from uuid import uuid4
 
 if __package__ in (None, ''):
@@ -20,6 +20,8 @@ if __package__ in (None, ''):
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 import plotly.graph_objects as go
 
+from hsights.common import analytics
+from hsights.common.sessions import SessionStore
 from hsights.config import HOST, PORT, SESSION_LIMIT, SESSION_TTL_SECONDS
 from hsights.home import PLAY_PATH, home_page
 from hsights.games.portfolio_challenge.data import create_round
@@ -313,9 +315,20 @@ OUTPUT_SPEC = (
 def create_app(round_factory=create_round):
     app = Dash(__name__, assets_folder=str(Path(__file__).with_name('assets')),
                update_title=None)
-    app.title = 'Portfolio Lab'
-    sessions = {}
-    lock = RLock()
+    app.title = 'Hindsight · Games about how markets fool you'
+    app.index_string = app.index_string.replace(
+        '{%metas%}', '{%metas%}<meta name="viewport" content="width=device-width, '
+                     'initial-scale=1"><meta name="description" content="Four short games '
+                     'about how markets fool people, built on real prices and honest '
+                     'statistics.">')
+    # Live rounds are evicted last: a paused game goes stale while the player
+    # thinks, and must not be the first thing dropped. Each session has its own
+    # lock, so one player's chart render no longer blocks everyone else.
+    sessions = SessionStore(SESSION_TTL_SECONDS, SESSION_LIMIT, keep_first=lambda entry:
+                            entry['game'].status in ('setup', 'paused', 'running'))
+    # Guards a session id that has no slot yet, until its first round exists.
+    creating = RLock()
+    app.sessions = sessions
 
     def setup_sheet():
         return html.Div(html.Div([
@@ -499,10 +512,10 @@ def create_app(round_factory=create_round):
             dcc.Interval(id='clock', interval=1000, disabled=True),
             html.Header([
                 dcc.Link([icon('chart'), html.Span('PORTFOLIO'),
-                          html.Span('LAB', className='wordmark-alt'),
-                          html.Span('HOME', className='home-hint')],
+                          html.Span('CHALLENGE', className='wordmark-alt'),
+                          html.Span('ALL GAMES', className='home-hint')],
                          href='/', className='wordmark wordmark-link',
-                         title='Back to the Hindsight home page. Your round is kept.'),
+                         title='Back to all Hindsight games. Your round is kept.'),
                 html.Div('NO ROUND LOADED', id='round-chip', className='round-chip'),
                 html.Div([html.Div('DAY 0 / 0', id='clock-label', className='clock-label'),
                           html.Div(html.Div(id='progress-fill', className='progress-fill',
@@ -569,12 +582,9 @@ def create_app(round_factory=create_round):
         trigger = ctx.triggered_id
         out = {key: no_update for key in OUTPUT_SPEC}
         out[('error', 'children')] = ''
-        with lock:
-            now = monotonic()
-            for stale in [key for key, value in sessions.items()
-                          if now - value['touched'] > SESSION_TTL_SECONDS]:
-                del sessions[stale]
-            entry = sessions.get(sid)
+        slot = sessions.get(sid)
+        with (slot.lock if slot else creating):
+            entry = slot.value if slot else None
             try:
                 if trigger == 'open-setup':
                     if entry and entry['game'].status == 'running':
@@ -606,17 +616,8 @@ def create_app(round_factory=create_round):
                                          end_date=end_date if period_mode == 'end' else None,
                                          exclude=excluded)
                     out[('seed', 'value')] = int(seed)
-                    if len(sessions) >= SESSION_LIMIT and sid not in sessions:
-                        # Evict finished rounds before live ones: a paused game goes
-                        # stale while the player thinks, and must not be the first
-                        # thing dropped.
-                        def eviction_key(key):
-                            status = sessions[key]['game'].status
-                            return (status in ('setup', 'paused', 'running'),
-                                    sessions[key]['touched'])
-                        del sessions[min(sessions, key=eviction_key)]
-                    entry = dict(game=game, touched=now, tick=tick or 0)
-                    sessions[sid] = entry
+                    entry = dict(game=game, tick=tick or 0)
+                    slot = sessions.put(sid, entry)
                     suggested = to_percent([weight * 100 for weight in game.suggested])
                     for index in range(3):
                         out[(f'w{index}', 'value')] = suggested[index]
@@ -627,11 +628,13 @@ def create_app(round_factory=create_round):
                     game = entry['game']
                     if trigger == 'allocate':
                         game.allocate([float(value or 0) / 100 for value in weights])
+                        record_start(entry)
                     elif trigger == 'primary':
                         # Dispatches to the same engine calls as the dock and
                         # transport buttons; it is a shortcut, not a second path.
                         if game.status == 'setup':
                             game.allocate([float(value or 0) / 100 for value in weights])
+                            record_start(entry)
                         elif game.status in ('paused', 'running'):
                             game.toggle()
                         else:
@@ -665,8 +668,8 @@ def create_app(round_factory=create_round):
                     elif trigger == 'clock' and (tick or 0) > entry['tick']:
                         game.step()
                     entry['tick'] = max(entry['tick'], tick or 0)
-                if entry:
-                    entry['touched'] = now
+                if slot:
+                    slot.touch()
             except (ValueError, TypeError, OverflowError, OSError) as exc:
                 out[('error', 'children')] = str(exc)
 
@@ -749,7 +752,13 @@ def create_app(round_factory=create_round):
             # flag so reopening settings does not resurrect it; leaving the terminal
             # state (rewind, restart, new round) clears the flag again.
             terminal = status in ('won', 'lost')
+            if terminal and not entry.get('completion_recorded'):
+                entry['completion_recorded'] = True
+                analytics.record('portfolio', 'complete', status=status,
+                                 assisted=snapshot['assisted'], days=day,
+                                 total_return=round(total_return, 4))
             if not terminal:
+                entry['completion_recorded'] = False
                 entry['result_dismissed'] = False
             if terminal and not entry.get('result_dismissed'):
                 out[('result', 'className')] = 'overlay result-overlay is-open'
@@ -774,8 +783,9 @@ def create_app(round_factory=create_round):
         balanced = abs(remaining) <= TOLERANCE
         badge = 'BALANCED' if balanced else f'{remaining:+.0f}%'
         badge_class = 'remaining ok' if balanced else 'remaining bad'
-        with lock:
-            entry = sessions.get(sid)
+        slot = sessions.get(sid)
+        with (slot.lock if slot else creating):
+            entry = slot.value if slot else None
             game = entry['game'] if entry else None
 
             def primary_blocked(confirm_blocked):
@@ -819,11 +829,11 @@ def create_app(round_factory=create_round):
         if trigger == 'preset-norm':
             total = sum(values)
             return to_percent([value / total * 100 for value in values]) if total > 0 else (34, 33, 33)
-        with lock:
-            entry = sessions.get(sid)
-            if entry is None:
-                return no_update, no_update, no_update
-            game = entry['game']
+        slot = sessions.get(sid)
+        if slot is None:
+            return no_update, no_update, no_update
+        with slot.lock:
+            game = slot.value['game']
             if trigger == 'preset-min':
                 weights, _ = minimum_risk(game.covariance())
                 return to_percent([weight * 100 for weight in weights])
@@ -845,23 +855,38 @@ def create_app(round_factory=create_round):
 
     @app.callback(Output('page-home', 'className'), Output('page-game', 'className'),
                   Output('clock', 'disabled', allow_duplicate=True),
-                  Input('url', 'pathname'), State('session', 'data'),
+                  Input('url', 'pathname'), State('url', 'search'), State('session', 'data'),
                   prevent_initial_call='initial_duplicate')
-    def route(pathname, sid):
+    def route(pathname, search, sid):
         """Swap pages, and freeze the market whenever the board is not on screen.
 
         The game is not mutated, so the status pill stays truthful; the browser
         simply stops ticking while you are reading the home page, and picks the
         clock back up if the round was still running when you left.
         """
+        # The hub and this board switch client-side, so their views are counted
+        # here rather than by the server's page-load hook.
         if not is_play_path(pathname):
+            analytics.record('hub', 'view')
             return 'page is-active', 'page', True
-        with lock:
-            entry = sessions.get(sid)
-            running = bool(entry and entry['game'].status == 'running')
+        query = parse_qs((search or '').lstrip('?'))
+        analytics.record('portfolio', 'view', src=query.get('src', [''])[0],
+                         pos=query.get('pos', [''])[0])
+        slot = sessions.get(sid)
+        running = False
+        if slot is not None:
+            with slot.lock:
+                running = slot.value['game'].status == 'running'
         return 'page', 'page is-active', not running
 
     return app
+
+
+def record_start(entry):
+    """Count a round as started the first time an allocation is committed."""
+    if not entry.get('start_recorded'):
+        entry['start_recorded'] = True
+        analytics.record('portfolio', 'start', universe='sp500')
 
 
 def is_play_path(pathname):
